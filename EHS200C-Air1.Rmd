@@ -1,0 +1,385 @@
+---
+title: "AQ_Walk"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r,  include=FALSE}
+
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(cluster)
+library(factoextra)
+library(spatial)
+library(spatialreg)
+library(spdep)
+
+
+#install.packages("factoextra")
+#install.packages("rspatial")
+
+```
+# JOin Data
+```{r,warning=FALSE}
+
+rm(list = ls())   # Clear the Environment
+
+setwd(
+  "G:/Documents/One Drive/OneDrive - UCLA IT Services/UCLA Coursework/Y1 Q3/EHS C200C/Project/Source Files"
+)
+#setwd("C:/Users/arbar/OneDrive - UCLA IT Services/UCLA Coursework/Y1 Q3/EHS C200C/Project/Source Files") #Laptop
+
+
+activetransport.data <-
+  readxl::read_xlsx('Walk-Bike_Tract_Estimates_11.20.14.xlsx')
+
+particulatematter.data <- read.csv('Geoid_krieg_2010.csv')
+
+medianincome.data <-
+  read_csv('ACS_IncomeData.csv') #From 2010 1-Year ACS (not available in the decennial census)
+
+
+```
+
+Load in Demographic Data from the Census
+```{r,message=FALSE}
+
+# Load census key - here's a key we made for this project
+census_api_key("d36944270723067a4158478e96cd3221c602fdd3") 
+
+# Load 2010 deccenial  estimate variables
+census_variables <- load_variables (2010,"sf1",cache=T)
+
+# List variables we want
+vars <- c (population_race="P003001", #race/ethnic total
+           race_white="P005003", #white NH alone
+           race_black="P005004", #black/african american NH
+           race_amindian="P005005", #american indian/alaska native NH
+           race_asian="P005006", #asian NH
+           race_pacisl="P005007", #native hawaiian and other pacific islander NH
+           race_other="P005008", #some other race alone NH
+           race_twoplus="P005009", #two or more races NH
+           race_hisp ="P005010", #total Hisp
+           totalHH = "H004001", #total households
+           renterHH = "H004004" # renterhouseholds
+           )
+# Define geography
+# Geographies and calls here:https://walkerke.github.io/tidycensus/articles/basic-usage.html
+# Geometry = T/F for coordinates 
+census_data <-get_decennial (state = "06", #California
+                 geography = "tract",
+                 variables = vars,
+                 geometry = T,
+                 output = "wide")
+
+```
+
+Calculate the percent of each race from the numbers.
+```{r}
+census_data$race_white_per = census_data$race_white / census_data$population_race #White NH
+census_data$race_black_per = census_data$race_black / census_data$population_race #Black NH
+census_data$race_amindian_per = census_data$race_amindian / census_data$population_race #American Indian NH
+census_data$race_asian_per = census_data$race_asian / census_data$population_race #Asian  NH
+census_data$race_pacisl_per = census_data$race_pacisl / census_data$population_race #Pacific islander NH
+census_data$race_other_per = census_data$race_other / census_data$population_race #Other NH
+census_data$race_twoplus_per = census_data$race_twoplus / census_data$population_race #Two or more NH
+census_data$race_hisp_per = census_data$race_hisp / census_data$population_race #Hispanic/Latino of any race
+
+
+$renter_per = census_data$renterHH / census_data$totalHH #Renters
+```
+
+# Join the Data Together!
+
+```{r}
+census_data$GEOID_Numeric <-
+  as.numeric(census_data$GEOID) #Create a numeric join column in the Census Data
+particulatematter.data$GEOID_Numeric <-
+  as.numeric(particulatematter.data$GEOID10)
+
+joinedData <-
+  merge(
+    census_data,
+    activetransport.data,
+    by.x = 'GEOID_Numeric',
+    by.y = 'fipsct...1',
+    all.x = T
+  )  #Join the Active Transport and Demographic Variables
+joinedData <-
+  merge(
+    joinedData,
+    medianincome.data,
+    by.x = 'GEOID_Numeric',
+    by.y = 'GEOID',
+    all.x = T
+  )  #Join Median Income Information
+joinedData <-
+  merge(
+    joinedData,
+    particulatematter.data,
+    by.x = 'GEOID_Numeric',
+    by.y = 'GEOID_Numeric',
+    all.x = F
+  ) #Join AQ and drop tracts
+
+#Create a smaller database for our use, that only includes the variables we are concerned about.
+small.data <- joinedData %>% select(
+  GEOID,
+  GEOID_Numeric,
+  NAME,
+  population_race,
+  race_white_per,
+  race_black_per,
+  race_asian_per,
+  race_amindian_per,
+  race_pacisl_per,
+  race_other_per,
+  race_hisp_per,
+  race_twoplus_per,
+  renter_per,
+  popdense,
+  land_area,
+  miles_b_chts,
+  miles_w_chts,
+  MEAN,
+  `Households!!Estimate!!Median income (dollars)`,
+  nh_type,
+  geometry
+)
+
+small.data <-
+  small.data %>% rename(PM_mean = MEAN, income = `Households!!Estimate!!Median income (dollars)`) #rename columns for easier use
+
+small.data$income <-
+  small.data$income %>% as.numeric() #Change income to a numeric variable
+
+small.data$nh_type_str <-
+  small.data$nh_type %>% as.character() #Change the Neighborhood Type Variable to be a character so we can run a logistic regresssion with it as a parameter.
+
+```
+
+Let's set up some of our columns for calculations.
+
+```{r}
+
+small.data <-
+  small.data %>% mutate(miles_biked_walked_total = miles_b_chts + miles_w_chts) %>% #Add Walked + Biked Totals together
+  mutate(miles_bike_walked_percapita = miles_biked_walked_total / population_race) %>%  # Scale teh Walked + BIked by population
+  mutate(nonwhite_per = race_black_per +  race_asian_per+ race_amindian_per + race_pacisl_per +
+           race_other_per + race_hisp_per+race_twoplus_per) %>% # Add a percent nonwhite column
+  mutate(pop_dens_sqm = population_race/land_area)
+
+```
+Regression Time
+```{r}
+#Simple bivariate regression.
+pm.active.simplelm <-
+  lm(data = small.data, PM_mean ~ miles_bike_walked_percapita)
+summary(pm.active.simplelm)
+plot(pm.active.simplelm)
+# Adjusted regression, accounting for population density and income and nh_type(categorical variable).
+pm.active.adjustedlm <-
+  lm(
+    data = small.data,
+    PM_mean ~ miles_bike_walked_percapita + pop_dens_sqm + income + renter_per +
+      nonwhite_per + nh_type_str
+  )
+summary(pm.active.adjustedlm)
+plot(pm.active.adjustedlm)
+  
+```
+## Plots
+
+
+```{r, echo=FALSE}
+ggplot(
+  data = small.data,
+  mapping = aes(x = miles_bike_walked_percapita, y = PM_mean, color = nh_type)
+) +
+  geom_point() +
+  geom_smooth(method = "lm", color = 'red') +
+  labs(
+    title = 'PM 2.5 and Active Transportation',
+    subtitle = 'By Census Tract in Los Angeles',
+    x = 'Miles Biked and Walked per Capita (per day)',
+    y = 'Particulate Matter 2.5 Average (ug/m3)'
+  ) +
+  #  scale_y_continuous(labels=scales::percent)+
+  #  scale_x_continuous(labels=scales::percent)+
+  theme_minimal()
+
+
+## PM and Density
+ggplot(data = small.data,
+       mapping = aes(x = pop_dens_sqm, y = PM_mean, color = nh_type)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = 'red') +
+  labs(
+    title = 'PM 2.5 and Population Density',
+    subtitle = 'By Census Tract in Los Angeles',
+    x = 'Population Density',
+    y = 'Particulate Matter 2.5 Average (ug/m3)'
+  ) +
+  #  scale_y_continuous(labels=scales::percent)+
+  #  scale_x_continuous(labels=scales::percent)+
+  theme_minimal()
+
+## Active Transport and Density
+ggplot(
+  data = small.data,
+  mapping = aes(x = pop_dens_sqm, y = miles_bike_walked_percapita, color = nh_type)
+) +
+  geom_point() +
+  geom_smooth(method = "lm", color = 'red') +
+  labs(
+    title = 'Active Transport and Population Density',
+    subtitle = 'By Census Tract in Los Angeles',
+    x = 'Population Density',
+    y = 'Miles Biked and Walked Per Capita Per Day'
+  ) +
+  #  scale_y_continuous(labels=scales::percent)+
+  #  scale_x_continuous(labels=scales::percent)+
+  theme_minimal()
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## K info()Means Clustering
+
+```{r}
+small.data.k <- small.data %>% select(
+  GEOID,
+  population_race,
+  pop_dens_sqm,
+  land_area,
+  PM_mean,
+  income,
+  miles_bike_walked_percapita,
+  nonwhite_per
+)
+
+rownames(small.data.k) <- small.data.k$GEOID
+
+small.data.k <-
+  small.data.k[-c(small.data.k$GEOID == '06037911001'),]  # Drop single outlier which is very different than all other tracts. Tract 06037911001
+
+small.data.k <- select(small.data.k,-GEOID)
+
+small.data.k <-
+  small.data.k %>% st_drop_geometry() #drop geometry column
+
+small.data.k <- na.omit(small.data.k) #remove all NA values
+small.data.k.scaled <-
+  scale(small.data.k) #scale data to be between 0 and 1
+
+
+km <- kmeans(small.data.k.scaled, centers = 4, nstart = 50)
+
+fviz_cluster(km, data = small.data.k.scaled)
+
+km.cluster <- km$cluster
+
+km.cluster <- as.data.frame(km.cluster)
+
+small.data.k$GEOID <- small.data.k %>% rownames()
+km.cluster$GEOID <- km.cluster %>% rownames()
+
+small.data.joined <-
+  merge(km.cluster, small.data, by.x = 'GEOID', by.y = 'GEOID')
+
+small.data.joined <-
+  small.data.joined %>% rename(clusterID = km.cluster)
+
+
+aggregate(small.data.joined,
+          by = list(cluster = small.data.joined$clusterID),
+          mean) #Summary Statistics for the different clusters.
+
+
+small.data.joined <-
+  sf::st_as_sf(small.data.joined, sf_column_name = 'geometry') #Convert back to a simple feature class.
+
+write_csv(small.data.joined, 'dataExport.csv')
+
+```
+```{r}
+
+ggplot(data=small.data.joined,aes(y=PM_mean,x=as.factor(clusterID)))+
+  geom_boxplot()
+
+ggplot(data=small.data.joined,aes(y=miles_bike_walked_percapita,x=as.factor(clusterID)))+
+  geom_boxplot()
+
+
+
+```
+
+# Spatial Autoregression
+```{r}
+
+completeSpatial <- sf::st_as_sf(small.data, sf_column_name = 'geometry')
+
+spatial.dropEmpty <-
+  completeSpatial[!st_is_empty(completeSpatial), ] #drop columns with empty geometries
+spatial.dropEmpty <- spatial.dropEmpty %>% drop_na() #Drop NAs
+
+nb <- poly2nb(spatial.dropEmpty)
+
+lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+
+shapiro.test(spatial.dropEmpty$PM_mean)  #Data is not normal
+ggplot(data = spatial.dropEmpty, aes(x = PM_mean)) +
+  geom_density()
+
+#Not Normally distributed.
+
+
+
+
+
+#Spatial Lag Adjusted Model
+
+#Simple, Bivariate Model
+m1.spatial <- lagsarlm(PM_mean~miles_bike_walked_percapita,data=spatial.dropEmpty,lw,zero.policy = TRUE)
+  summary(m1.spatial)
+
+#Adjusted for other variables
+m2.spatial <-
+  lagsarlm(
+    PM_mean ~ miles_bike_walked_percapita + pop_dens_sqm + income + renter_per +
+      nonwhite_per,
+    data = spatial.dropEmpty,
+    lw,
+    zero.policy = TRUE
+  )
+summary(m2.spatial)
+
+#Adjusted + includes neighborhood type./
+m3.spatial <- 
+   lagsarlm(
+    PM_mean ~ miles_bike_walked_percapita + pop_dens_sqm + income + renter_per +
+      nonwhite_per+nh_type_str,
+    data = spatial.dropEmpty,
+    lw,
+    zero.policy = TRUE
+  )
+summary(m3.spatial)
+```
+## Corellation (Spearman and Pearson)
+```{r}
+
+#pearson
+cor(x=small.data.joined$PM_mean,y=small.data.joined$miles_bike_walked_percapita,method = 'pearson')
+
+#Spearman
+cor(x=small.data.joined$PM_mean,y=small.data.joined$miles_bike_walked_percapita,method = 'spearman')
+
+?cor
+
+```
