@@ -26,14 +26,12 @@ library(spdep)
 #install.packages("rspatial")
 
 ```
-# JOin Data
+# Join Data
 ```{r,warning=FALSE}
 
 rm(list = ls())   # Clear the Environment
 
-setwd(
-  "G:/Documents/One Drive/OneDrive - UCLA IT Services/UCLA Coursework/Y1 Q3/EHS C200C/Project/Source Files"
-)
+#setwd("G:/Documents/One Drive/OneDrive - UCLA IT Services/UCLA Coursework/Y1 Q3/EHS C200C/Project/Source Files")
 #setwd("C:/Users/arbar/OneDrive - UCLA IT Services/UCLA Coursework/Y1 Q3/EHS C200C/Project/Source Files") #Laptop
 
 
@@ -93,7 +91,7 @@ census_data$race_twoplus_per = census_data$race_twoplus / census_data$population
 census_data$race_hisp_per = census_data$race_hisp / census_data$population_race #Hispanic/Latino of any race
 
 
-$renter_per = census_data$renterHH / census_data$totalHH #Renters
+census_data$renter_per = census_data$renterHH / census_data$totalHH #Renters
 ```
 
 # Join the Data Together!
@@ -101,7 +99,8 @@ $renter_per = census_data$renterHH / census_data$totalHH #Renters
 ```{r}
 census_data$GEOID_Numeric <-
   as.numeric(census_data$GEOID) #Create a numeric join column in the Census Data
-particulatematter.data$GEOID_Numeric <-
+
+particulatematter.data$GEOID_Numeric <- #Create a numeric join column in the PM Data
   as.numeric(particulatematter.data$GEOID10)
 
 joinedData <-
@@ -174,9 +173,12 @@ small.data <-
   mutate(miles_bike_walked_percapita = miles_biked_walked_total / population_race) %>%  # Scale teh Walked + BIked by population
   mutate(nonwhite_per = race_black_per +  race_asian_per+ race_amindian_per + race_pacisl_per +
            race_other_per + race_hisp_per+race_twoplus_per) %>% # Add a percent nonwhite column
-  mutate(pop_dens_sqm = population_race/land_area)
+  mutate(pop_dens_sqm = population_race/land_area) #Calculate a new density
 
 ```
+
+
+## OLS Regression
 Regression Time
 ```{r}
 #Simple bivariate regression.
@@ -184,21 +186,34 @@ pm.active.simplelm <-
   lm(data = small.data, PM_mean ~ miles_bike_walked_percapita)
 summary(pm.active.simplelm)
 plot(pm.active.simplelm)
-# Adjusted regression, accounting for population density and income and nh_type(categorical variable).
+
+# Without including NH_Type
 pm.active.adjustedlm <-
+  lm(
+    data = small.data,
+    PM_mean ~ miles_bike_walked_percapita + pop_dens_sqm + income + renter_per +
+      nonwhite_per
+  )
+summary(pm.active.adjustedlm)
+
+# Adjusted regression, accounting for population density and income and nh_type(categorical variable).
+pm.active.adjustednhlm <-
   lm(
     data = small.data,
     PM_mean ~ miles_bike_walked_percapita + pop_dens_sqm + income + renter_per +
       nonwhite_per + nh_type_str
   )
-summary(pm.active.adjustedlm)
-plot(pm.active.adjustedlm)
+summary(pm.active.adjustednhlm)
+
+plot(pm.active.adjustednhlm)
   
 ```
 ## Plots
 
 
 ```{r, echo=FALSE}
+# PM 2.5 and Active Transportation
+
 ggplot(
   data = small.data,
   mapping = aes(x = miles_bike_walked_percapita, y = PM_mean, color = nh_type)
@@ -216,7 +231,7 @@ ggplot(
   theme_minimal()
 
 
-## PM and Density
+# PM and Density
 ggplot(data = small.data,
        mapping = aes(x = pop_dens_sqm, y = PM_mean, color = nh_type)) +
   geom_point() +
@@ -224,7 +239,7 @@ ggplot(data = small.data,
   labs(
     title = 'PM 2.5 and Population Density',
     subtitle = 'By Census Tract in Los Angeles',
-    x = 'Population Density',
+    x = 'Population Density (per square mile)',
     y = 'Particulate Matter 2.5 Average (ug/m3)'
   ) +
   #  scale_y_continuous(labels=scales::percent)+
@@ -241,7 +256,7 @@ ggplot(
   labs(
     title = 'Active Transport and Population Density',
     subtitle = 'By Census Tract in Los Angeles',
-    x = 'Population Density',
+    x = 'Population Density (per square mile)',
     y = 'Miles Biked and Walked Per Capita Per Day'
   ) +
   #  scale_y_continuous(labels=scales::percent)+
@@ -249,11 +264,10 @@ ggplot(
   theme_minimal()
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
-## K info()Means Clustering
+## K Means Clustering
 
-```{r}
-small.data.k <- small.data %>% select(
+```{r, warning=FALSE}
+small.data.k <- small.data %>% select(  #Select the variables we would like to cluster off of.
   GEOID,
   population_race,
   pop_dens_sqm,
@@ -264,22 +278,23 @@ small.data.k <- small.data %>% select(
   nonwhite_per
 )
 
-rownames(small.data.k) <- small.data.k$GEOID
+rownames(small.data.k) <- small.data.k$GEOID #Set the rownames to the Census GEOID
 
 small.data.k <-
   small.data.k[-c(small.data.k$GEOID == '06037911001'),]  # Drop single outlier which is very different than all other tracts. Tract 06037911001
 
-small.data.k <- select(small.data.k,-GEOID)
+small.data.k <- select(small.data.k,-GEOID) #Remove the GEOID Column (it won't work with K Means)
 
 small.data.k <-
   small.data.k %>% st_drop_geometry() #drop geometry column
 
 small.data.k <- na.omit(small.data.k) #remove all NA values
+
 small.data.k.scaled <-
   scale(small.data.k) #scale data to be between 0 and 1
 
 
-km <- kmeans(small.data.k.scaled, centers = 4, nstart = 50)
+km <- kmeans(small.data.k.scaled, centers = 4, nstart = 50) #Use four clusters (due to NH_Type)
 
 fviz_cluster(km, data = small.data.k.scaled)
 
