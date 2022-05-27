@@ -1,8 +1,8 @@
 ---
 title: "AQ_Walk"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -385,6 +385,12 @@ m3.spatial <-
     zero.policy = TRUE
   )
 summary(m3.spatial)
+```
+## Chi Square Test?
+```{r}
+
+chisq.test(small.data.joined$PM_mean,small.data.joined$nh_type_str,correct=F)
+
 ```
 ## Corellation (Spearman and Pearson)
 ```{r}
