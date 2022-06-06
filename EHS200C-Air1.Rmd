@@ -31,6 +31,7 @@ library(spdep)
 
 rm(list = ls())   # Clear the Environment
 
+setwd("~/GitHub/ehs200c")
 #setwd("G:/Documents/One Drive/OneDrive - UCLA IT Services/UCLA Coursework/Y1 Q3/EHS C200C/Project/Source Files")
 #setwd("C:/Users/arbar/OneDrive - UCLA IT Services/UCLA Coursework/Y1 Q3/EHS C200C/Project/Source Files") #Laptop
 
@@ -75,7 +76,8 @@ census_data <-get_decennial (state = "06", #California
                  geography = "tract",
                  variables = vars,
                  geometry = T,
-                 output = "wide")
+                 output = "wide",
+                 year = 2010)
 
 ```
 
@@ -216,19 +218,22 @@ plot(pm.active.adjustednhlm)
 
 ggplot(
   data = small.data,
-  mapping = aes(x = miles_bike_walked_percapita, y = PM_mean, color = nh_type)
+  mapping = aes(x = miles_bike_walked_percapita, y = PM_mean, color = nh_type_str)
 ) +
   geom_point() +
   geom_smooth(method = "lm", color = 'red') +
   labs(
     title = 'PM 2.5 and Active Transportation',
-    subtitle = 'By Census Tract in Los Angeles',
+    subtitle = 'By Census Tract in Los Angeles County',
     x = 'Miles Biked and Walked per Capita (per day)',
-    y = 'Particulate Matter 2.5 Average (ug/m3)'
+    y = 'Particulate Matter 2.5 Average (ug/m3)',
+    color='Neighborhood Type'
   ) +
+  scale_color_manual(labels=c("1-Suburban","2-Urban","3-Rural","4-City Center"),values=c('darkseagreen2','darkorchid1','darkslategray1','lightpink1'))+
+  theme_minimal()
   #  scale_y_continuous(labels=scales::percent)+
   #  scale_x_continuous(labels=scales::percent)+
-  theme_minimal()
+
 
 
 # PM and Density
@@ -242,9 +247,8 @@ ggplot(data = small.data,
     x = 'Population Density (per square mile)',
     y = 'Particulate Matter 2.5 Average (ug/m3)'
   ) +
-  #  scale_y_continuous(labels=scales::percent)+
-  #  scale_x_continuous(labels=scales::percent)+
-  theme_minimal()
+   theme_minimal()
+
 
 ## Active Transport and Density
 ggplot(
@@ -255,10 +259,11 @@ ggplot(
   geom_smooth(method = "lm", color = 'red') +
   labs(
     title = 'Active Transport and Population Density',
-    subtitle = 'By Census Tract in Los Angeles',
+    subtitle = 'By Census Tract in Los Angeles County',
     x = 'Population Density (per square mile)',
-    y = 'Miles Biked and Walked Per Capita Per Day'
+    y = 'Miles Biked and Walked Per Capita Per Day',
   ) +
+  scale_color_manual(labels=c("1-Suburban","2-Urban","3-Rural","4-City Center"))
   #  scale_y_continuous(labels=scales::percent)+
   #  scale_x_continuous(labels=scales::percent)+
   theme_minimal()
@@ -267,6 +272,7 @@ ggplot(
 ## K Means Clustering
 
 ```{r, warning=FALSE}
+set.seed(1234)
 small.data.k <- small.data %>% select(  #Select the variables we would like to cluster off of.
   GEOID,
   population_race,
@@ -311,11 +317,32 @@ small.data.joined <-
 small.data.joined <-
   small.data.joined %>% rename(clusterID = km.cluster)
 
+small.data.joined$clusterName 
+#small.data.joined[small.data.joined$clusterID ==1,'clusterName']  
 
-aggregate(small.data.joined,
+
+aggregatedCluster <- aggregate(small.data.joined,
           by = list(cluster = small.data.joined$clusterID),
           mean) #Summary Statistics for the different clusters.
 
+aggregatedCluster
+
+aggregatedCluster <- aggregatedCluster %>%  
+  arrange(desc(PM_mean)) 
+  
+
+aggregatedCluster$clusterName 
+aggregatedCluster[1,'clusterName'] = 'Urban' 
+aggregatedCluster[2,'clusterName'] = 'Lower Income Suburbs'
+aggregatedCluster[3,'clusterName'] = 'Higher Income Suburbs'
+aggregatedCluster[4,'clusterName'] = 'Rural'
+
+aggregatedCluster <- aggregatedCluster %>% select('clusterID','clusterName')
+
+# join this back to the small data. 
+
+small.data.joined <- merge(small.data.joined,aggregatedCluster,by='clusterID')
+table(small.data.joined$clusterName)
 
 small.data.joined <-
   sf::st_as_sf(small.data.joined, sf_column_name = 'geometry') #Convert back to a simple feature class.
@@ -323,10 +350,22 @@ small.data.joined <-
 write_csv(small.data.joined, 'dataExport.csv')
 
 ```
+
 ```{r}
 
-ggplot(data=small.data.joined,aes(y=PM_mean,x=as.factor(clusterID)))+
-  geom_boxplot()
+clusterOrder <- c('Rural','Higher Income Suburb','Lower Income Suburb','Urban')
+
+
+ggplot(data=small.data.joined,aes(y=PM_mean,x=reorder(clusterName,PM_mean)))+
+  geom_boxplot()+
+  labs(
+  title = 'PM 2.5 by Cluster',
+  subtitle = 'By Census Tract in Los Angeles County',
+  x = 'Cluster ID',
+  y = 'PM 2.5 (ug/m3)',
+  ) +
+  theme_minimal()
+
 
 ggplot(data=small.data.joined,aes(y=miles_bike_walked_percapita,x=as.factor(clusterID)))+
   geom_boxplot()
