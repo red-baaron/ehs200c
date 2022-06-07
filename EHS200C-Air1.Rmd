@@ -1,8 +1,8 @@
 ---
 title: "AQ_Walk"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -238,35 +238,19 @@ ggplot(
 
 # PM and Density
 ggplot(data = small.data,
-       mapping = aes(x = pop_dens_sqm, y = PM_mean, color = nh_type)) +
+       mapping = aes(x = pop_dens_sqm, y = PM_mean, color = nh_type_str)) +
   geom_point() +
   geom_smooth(method = "lm", color = 'red') +
   labs(
     title = 'PM 2.5 and Population Density',
     subtitle = 'By Census Tract in Los Angeles',
     x = 'Population Density (per square mile)',
-    y = 'Particulate Matter 2.5 Average (ug/m3)'
+    y = 'Particulate Matter 2.5 Average (ug/m3)',
+    color='Neighborhood Type'
   ) +
+    scale_color_manual(labels=c("1-Suburban","2-Urban","3-Rural","4-City Center"),values=c('darkseagreen2','darkorchid1','darkslategray1','lightpink1'))+
    theme_minimal()
 
-
-## Active Transport and Density
-ggplot(
-  data = small.data,
-  mapping = aes(x = pop_dens_sqm, y = miles_bike_walked_percapita, color = nh_type)
-) +
-  geom_point() +
-  geom_smooth(method = "lm", color = 'red') +
-  labs(
-    title = 'Active Transport and Population Density',
-    subtitle = 'By Census Tract in Los Angeles County',
-    x = 'Population Density (per square mile)',
-    y = 'Miles Biked and Walked Per Capita Per Day',
-  ) +
-  scale_color_manual(labels=c("1-Suburban","2-Urban","3-Rural","4-City Center"))
-  #  scale_y_continuous(labels=scales::percent)+
-  #  scale_x_continuous(labels=scales::percent)+
-  theme_minimal()
 ```
 
 ## K Means Clustering
@@ -353,9 +337,6 @@ write_csv(small.data.joined, 'dataExport.csv')
 
 ```{r}
 
-clusterOrder <- c('Rural','Higher Income Suburb','Lower Income Suburb','Urban')
-
-
 ggplot(data=small.data.joined,aes(y=PM_mean,x=reorder(clusterName,PM_mean)))+
   geom_boxplot()+
   labs(
@@ -365,11 +346,6 @@ ggplot(data=small.data.joined,aes(y=PM_mean,x=reorder(clusterName,PM_mean)))+
   y = 'PM 2.5 (ug/m3)',
   ) +
   theme_minimal()
-
-
-ggplot(data=small.data.joined,aes(y=miles_bike_walked_percapita,x=as.factor(clusterID)))+
-  geom_boxplot()
-
 
 
 ```
@@ -387,13 +363,13 @@ nb <- poly2nb(spatial.dropEmpty)
 
 lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
 
+#Do General Test for Normality.
 shapiro.test(spatial.dropEmpty$PM_mean)  #Data is not normal
 ggplot(data = spatial.dropEmpty, aes(x = PM_mean)) +
-  geom_density()
-
-#Not Normally distributed.
+  geom_density() 
 
 
+spatial.dropEmpty$nh_type_str <- as.factor(spatial.dropEmpty$nh_type_str) 
 
 
 
@@ -424,15 +400,8 @@ m3.spatial <-
     zero.policy = TRUE
   )
 summary(m3.spatial)
-```
-## Chi Square Test?
-```{r}
 
-chisq.test(small.data.joined$PM_mean,small.data.joined$nh_type_str,correct=F)
-
-```
 ## Corellation (Spearman and Pearson)
-```{r}
 
 #pearson
 cor(x=small.data.joined$PM_mean,y=small.data.joined$miles_bike_walked_percapita,method = 'pearson')
